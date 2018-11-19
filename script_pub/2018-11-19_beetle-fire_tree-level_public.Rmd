@@ -1,0 +1,624 @@
+---
+title: 'Beetle-Fire Tree-level Manuscript'
+author: "Anna Talucci"
+date: "2018-11-19"
+output: html_document
+---
+
+# Overview
+
+The purpose of this document is to complete the analysis for Chapter 1 Part 3 evaluating biomass consumption. We had two variables that were collected in the field as categorical data - canopy structure and deep char. The goal was to assess biomass consumption on individual trees based on whether they were live or dead at time of fire.  Remaining canopy structure and deep char are not quantification of biomass consumption, but serve as proxy indicators of consumed biomass
+
+Initial attempts at analysis were focus on using models with ordinal package that treated the data as ordinal or nominal because each response variable had 3 categories. The data were tested to determine if they met the assumption of proportional odds, which they did not. Not meeting the assumption of proportional odds meant that the data needed to be treated as nominal, which is where we ran into some trouble. After much evaluation we reverted back to using GLMM with binomial distribution and treated the response variables as binary. 
+
+Discrete binomial data, used here in this analysis, are set up as "yes" or "no". This can also be thought of as success/failure or probably more applicable here as presence/absence, which is helpful for thinking about probability of occurrence.  
+
+We are interested in the probability of a beetle-killed tree (or pre-fire dead tree) having deep char or no remaining canopy. Note that tree canopy structure is referring to the structural pieces small twigs through large branches and not needles. A tree with no remaining canopy had no remaining branches on the tree or the ground.
+
+Trees were surveyed in plots, and we are assuming that there is some correlation for trees that are in the same plot.  We will account for that correlation by including a random effect of the plot.  By including a random effect that model changes to a mixed effect model. 
+
+## Packages
+
+```{r, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(lme4)
+library(lsmeans)
+library(DHARMa)
+library(gmodels)
+library(GGally)
+library(gridExtra)
+library(cowplot)
+library(magick)
+```
+
+## Data
+
+```{r}
+biomass = read.csv("../data/biomass_5july2017.csv",header=TRUE, sep = ",", strip.white = TRUE)
+
+head(biomass)
+summary(biomass)
+```
+
+## Calculate Additional Variables For Analysis
+
+Response variables of interest in the data set:
+
+  1. canopy.str = 3 variables; full partial none
+  2. pyro = 4 variables, 1, 2, 3, 4 = none, >50%, <50%, into canopy
+  3. pyro3 = 3 variables; 1, 2, 3 = none, >50%, <50%
+
+Because we collected the data as categorical with more than two categories, we will create new variables that split the variables into binary categories.
+  
+We will add two other variables based on the data set:
+
+  1. pyro2 = absence(no)/presence(yes) of deep char on trees
+  2. canopy2 = absence(no)/presence(yes) of remaining canopy structure in trees
+  3. prefire = prefire mortality (yes) / fire mortality (no)
+
+```{r}
+biomass = mutate(biomass, pyro2 = ifelse(pyro3 == "1", "no", "yes"))
+
+biomass = mutate(biomass, canopy2 = ifelse(canopy.str == "none", "no", "yes"))
+
+biomass = mutate(biomass, prefire = ifelse(mortality == "FIRE", "no", "yes") )
+  
+```
+
+```{r}
+biomass$pyro = factor(biomass$pyro)
+```
+
+Now we will look at the data
+
+```{r}
+head(biomass)
+
+str(biomass)
+```
+
+Here we will define our variables as factors to ensure that they are treated as factors in the models. 
+
+```{r}
+biomass$pyro = as.factor(biomass$pyro)
+
+biomass$pyro2 = as.factor(biomass$pyro2)
+
+biomass$pyro3 = as.factor(biomass$pyro3)
+
+biomass$canopy2 = as.factor(biomass$canopy2)
+
+biomass$prefire = as.factor(biomass$prefire)
+```
+
+```{r}
+summary(biomass)
+```
+
+## Set reference level
+
+Here we will set our reference levels.  This will help with interpreting the results. We will set reference levels for both explanatory and response variables.  
+
+**Explanatory Variabes**
+We set fire as the reference level for mortality because we are interested in beetle killed or prefire mortality burns differently then live fire killed trees.  We defining moderate burning conditions as the reference level, because it seemed more intuitive. 
+
+**Response Variables**
+We also set the reference level for our response variables.  This will assist with interpretation of the summary output of the results.  
+
+We are interested in the probability of a beetle killed tree (or pre-fire dead tree) loosing its canopy **"no"**. We want to predict the probability of **"no"** so we will set the reference level to **"yes"**. (this is based off of comments in https://stats.stackexchange.com/questions/207427/confused-with-the-reference-level-in-logistic-regression-in-r) 
+
+We are interested in the probability of a beetle killed tree (or pre-fire dead tree) having deep char **"yes"**. We want to predict the probability of **"yes"** so we will set the reference level to **"no"**.
+
+```{r}
+biomass$mortality = factor(biomass$mortality,
+                          levels = c("FIRE","BOM","UPF"))
+
+biomass$burncon = factor(biomass$burncon,
+                          levels = c("moderate","extreme"))
+
+biomass$canopy2 = factor(biomass$canopy2,
+                          levels = c("yes","no"))
+
+biomass$pyro2 = factor(biomass$pyro2,
+                          levels = c("no", "yes"))
+
+biomass$prefire = factor(biomass$prefire,
+                          levels = c("no", "yes"))
+```
+
+Let's check the structure before proceeding to make sure our reference levels are what we want.
+
+```{r}
+str(biomass)
+```
+
+# Data visualization
+
+Let's look at the Data for anything weird/anomalous. 
+
+## Response Variables
+
+### Canopy Structure
+
+```{r, fig.height=3, fig.width=3}
+qplot(x = canopy.str, data = biomass)
+```
+
+```{r, fig.height=3, fig.width=3}
+qplot(x = canopy2, data = biomass)
+```
+
+Tables will allow us to examine the data for any zeros. Zeros will make it challenging to analyze because there may no be enough unique information.
+
+```{r}
+with(biomass, table(canopy2, mortality, burncon))
+```
+
+#### Canopy structure as a function of percent deep char
+
+```{r}
+with(biomass, table(canopy2, pyro3, mortality, burncon))
+```
+
+```{r}
+with(biomass, table(canopy2, pyro3, mortality))
+```
+
+```{r}
+with(biomass, table(canopy2, pyro3))
+```
+
+```{r}
+with(biomass, table(canopy2, prefire))
+```
+
+```{r}
+with(biomass, table(pyro2, prefire))
+```
+
+### Deep Char
+
+```{r, fig.height=3, fig.width=3}
+qplot(x = pyro3, data = biomass)
+```
+
+
+```{r, fig.height=3, fig.width=3}
+qplot(x = pyro2, data = biomass)
+```
+
+
+```{r}
+with(biomass, table(pyro2, mortality, burncon))
+```
+
+```{r}
+with(biomass, table(pyro2, prefire, burncon))
+```
+
+```{r}
+with(biomass, table(canopy2, prefire, burncon))
+```
+
+# Analysis: Full data set as yes/no
+
+## Canopy Structure
+
+### Model: Canopy structure presence/absence
+
+```{r}
+canopymod1 = glmer(canopy2 ~ mortality + burncon + (1 | id), data = biomass, family = binomial(link = "logit"))
+```
+
+```{r}
+canopymod2 = glmer(canopy2 ~ mortality*burncon + (1 | id), data = biomass, family = binomial(link = "logit"))
+```
+
+### Residuals
+
+Since the response are "0" and "1" the residuals will not show much. The below set of functions will generate residuals, which we will then plot.
+
+```{r, include=FALSE}
+canopymod2.res = simulateResiduals(fittedModel = canopymod2, n = 250)
+
+canopymod2.res$scaledResiduals
+
+canopymod2.res$scaledResidualsNormal
+```
+
+In the plot below, we are looking for the points in the QQ plot to fall along the RED line. In the Residuals vs.predicted plot we are looking for the lines to be relatively horizontal. All looks good. 
+
+```{r}
+plotSimulatedResiduals(simulationOutput = canopymod2.res)
+```
+
+### Drop-in-deviance
+Here we conduct a drop-in-deviance test to assess the interaction term. It seems that the interaction term is significant at 10%. In looking back at the model, it seems that interaction term was important for beetle-killed trees (mortaltybom) with extreme burning conditions (burnconxtrm). 
+
+```{r}
+anova(canopymod1, canopymod2)
+```
+
+### Model Summary
+
+We will use probabilities and odds ratios to report the results.  The estimates and coefficients from the summary output are not appropriate for drawing inference. The odds ratios will allow us to compare the difference between groups of interest (e.g. beetle-killed vs. fire-killed).
+
+We are interested in the probability of a tree loosing its canopy **"no"**. We want to predict the probability of **"no"** so we will set the reference level to **"yes"**. 
+
+```{r}
+summary(canopymod2)
+```
+
+This means that canopy loss has a higher probability of occurrence on a Beetle-killed tree (BOM), 0.70 or 70%, versus a fire-killed tree (FIRE), 0.0003 or 0.03% under moderate burning conditions. 
+
+#### Probabilities & Contrast with p-values
+
+```{r}
+summary(lsmeans(canopymod2, pairwise ~ mortality|burncon), type = "response", infer = TRUE, level = .90, adjust = "bon")
+```
+
+##### Data Frame propbabilities and contrast (Odds Ratios by mortality type)
+
+```{r}
+data.frame(summary(lsmeans(canopymod2, pairwise ~ mortality|burncon),type = "response", infer = TRUE, level = .90, adjust = "bon"))
+```
+
+#### Probabilities and reverse Odds Ratios with P-values
+
+We are calculating the odds ratios for the reverse relationship. We are doing this because the values are so small for the FIRE-BOM and FIRE-UPF.  The reverse will be easier to interpret and communicate.
+
+```{r}
+lsmeans(canopymod2, revpairwise ~ mortality|burncon, type = "response", infer = TRUE, level = .9, adjust = "bon")
+```
+
+##### Data Frame
+
+```{r}
+data.frame(summary(lsmeans(canopymod2, revpairwise ~ mortality|burncon),type = "response", infer = TRUE, level = .9, adjust = "bon"))
+```
+
+#### Interpreting results Odds Ratios:
+
+The probabilities are useful if were are interested in the probability being different then zero. The p-value associated with the probability is telling us if the probability is different then zero.
+
+**For Moderate burning conditons:**
+
+The odds ratio of bom-fire for a tree having no remaining canopy is 8099 - Thus, for a beetle killed tree, the odds of having no remaining canopy are 8099 times greater for a beetle killed tree than a fire-killed tree. 
+
+**For extreme burning conditions:**
+
+The odds ratio of fire-bom for a tree having no remaining canopy is 0.0106 - Thus, for a fire killed tree, the odds of having no remaining canopy are 0.0106 times smaller than the odds for a beetle killed tree having no remaining canopy cover. 
+
+## Prefire - Canopy
+
+### Model: Prefire/fire Mortality w/ canopy
+
+```{r}
+prefirecanopymod1 = glmer(canopy2 ~ prefire + burncon + (1 | id), data = biomass, family = binomial(link = "logit"))
+```
+
+```{r}
+prefirecanopymod2 = glmer(canopy2 ~ prefire * burncon + (1 | id), data = biomass, family = binomial(link = "logit"))
+```
+
+#### Residuals
+
+Since the response are "0" and "1" the residuals will not show much. The below set of functions will generate residuals, which we will then plot.
+
+```{r, include=FALSE}
+res.prefirecanopymod2 = simulateResiduals(fittedModel = prefirecanopymod2, n = 250)
+
+res.prefirecanopymod2$scaledResiduals
+
+res.prefirecanopymod2$scaledResidualsNormal
+```
+
+In the plot below, we are looking for the points in the QQ plot to fall along the RED line. In the Residuals vs.predicted plot we are looking for the lines to be relatively horizontal. All looks good. 
+
+```{r}
+plotSimulatedResiduals(simulationOutput = res.prefirecanopymod2)
+```
+
+#### Drop-in-deviance
+
+Here we conduct a drop-in-deviance test to test the interaction term. The interaction term is found not to be significant.
+
+```{r}
+anova(prefirecanopymod1, prefirecanopymod2)
+```
+
+#### Model Summary
+
+We will use probabilities and odds ratios to report the results.  The estimates and coefficients from the summary output are not appropriate for drawing inference. The odds ratios will allow us to compare the difference between groups of interest (e.g. beetle-killed vs. fire-killed).
+
+We are interested in the probability of a tree having deep char **"yes"**. We want to predict the probability of **"yes"** so we will set the reference level to **"no"**. 
+
+```{r}
+summary(prefirecanopymod2)
+```
+
+##### Probabilities & Odds Ratios
+
+```{r}
+summary(lsmeans(prefirecanopymod2, pairwise ~ prefire|burncon, type = "response", infer = TRUE))
+```
+###### Data Frame
+
+```{r}
+data.frame(summary(lsmeans(prefirecanopymod2, pairwise ~ prefire|burncon),type = "response", infer = TRUE))
+```
+
+P-value for probabilities is telling us if the probability is different from 0.
+P-value for contrast is telling us if there is a difference between the groups. This is the p-value we are interested in.
+
+##### Calculate reverse Odds Ratios 
+
+We are calculating the odds ratios for the reverse relationship. We are doing this because the values are so small for the FIRE-BOM and FIRE-UPF.  The reverse will be easier to interpret.
+
+```{r}
+summary(lsmeans(prefirecanopymod2, revpairwise ~ prefire|burncon, type = "response"))
+```
+###### Data Frame
+
+```{r}
+data.frame(summary(lsmeans(prefirecanopymod2, revpairwise ~ prefire|burncon),type = "response", infer = TRUE))
+```
+
+## Deep Char
+
+### Model: Pyro2 presence/abscence
+
+```{r}
+pyromod1 = glmer(pyro2 ~ mortality + burncon + (1 | id), data = biomass, family = binomial(link = "logit"))
+```
+
+```{r}
+pyromod2 = glmer(pyro2 ~ mortality * burncon + (1 | id),
+              data = biomass, family = binomial(link = "logit"))
+```
+
+#### Residuals
+
+Since the response are "0" and "1" the residuals will not show much. The below set of functions will generate residuals, which we will then plot.
+
+```{r, include=FALSE}
+res.pyromod2 = simulateResiduals(fittedModel = pyromod2, n = 250)
+
+res.pyromod2$scaledResiduals
+
+res.pyromod2$scaledResidualsNormal
+```
+
+In the plot below, we are looking for the points in the QQ plot to fall along the RED line. In the Residuals vs.predicted plot we are looking for the lines to be relatively horizontal. All looks good. 
+
+```{r}
+plotSimulatedResiduals(simulationOutput = res.pyromod2)
+```
+
+#### Drop-in-deviance
+
+Here we conduct a drop-in-deviance test to test the interaction term. The interaction term is found not to be significant.
+
+```{r}
+anova(pyromod1, pyromod2)
+```
+
+#### Model Summary
+
+We will use probabilities and odds ratios to report the results.  The estimates and coefficients from the summary output are not appropriate for drawing inference. The odds ratios will allow us to compare the difference between groups of interest (e.g. beetle-killed vs. fire-killed).
+
+We are interested in the probability of a tree having deep char **"yes"**. We want to predict the probability of **"yes"** so we will set the reference level to **"no"**.
+
+```{r}
+summary(pyromod2)
+```
+
+##### Probabilities & Odds Ratios
+
+```{r}
+summary(lsmeans(pyromod2, pairwise ~ mortality*burncon, type = "response", infer = TRUE, level = .9, adjust = "bon"))
+```
+
+###### Data Frame
+
+```{r}
+data.frame(summary(lsmeans(pyromod2, pairwise ~ mortality|burncon),type = "response", infer = TRUE))
+```
+
+##### Probabilities with reverse Odds Ratios 
+
+We are calculating the odds ratios for the reverse relationship. We are doing this because the values are so small for the FIRE-BOM and FIRE-UPF.  The reverse will be easier to interpret.
+
+```{r}
+summary(lsmeans(pyromod2, revpairwise ~ mortality|burncon, type = "response", infer = TRUE, level = .9, adjust = "bon"))
+```
+
+###### Data frame
+
+```{r}
+data.frame(summary(lsmeans(pyromod2, revpairwise ~ mortality|burncon),type = "response", infer = TRUE))
+```
+
+
+Let's remind ourselves what we are interested in - We are interested in the probability of a beetle killed tree (or pre-fire dead tree) having deep char **"yes"**. We want to predict the probability of **"yes"** so we will set the reference level to **"no"**.
+
+This means that deep char has a higher probability of occurrence on a Beetle-killed tree (BOM), 0.99 or 99%, versus a fire-killed tree (FIRE), 0.012 or 1.2% under moderate burning conditions. 
+Report odds ratio with confidence intervals, because it is a multiplicative relationship and the CI are asymptotic.
+
+#### Interpreting Odds Ratios:
+
+**For Moderate burning conditons:**
+
+The odds ratio of a tree having deep char for fire-bom is 0.0001 - Thus, for a fire-killed tree, the odds of having deep char are 0.00010 times smaller than the odds for a beetle-killed tree having deep char. 
+
+**For extreme burning conditions:**
+
+The odds ratio of a tree having deep char for fire-bom is 0.0016 - Thus, for a fire-killed tree, the odds of having deep char are 0.0016 times smaller than the odds for a beetle-killed tree having deep char.
+
+## Prefire - Deep Char
+
+### Model: Prefire/fire Mortality w/ deep char
+
+```{r}
+prefirepyromod1 = glmer(pyro2 ~ prefire + burncon + (1 | id), data = biomass, family = binomial(link = "logit"))
+```
+
+```{r}
+prefirepyromod2 = glmer(pyro2 ~ prefire * burncon + (1 | id),
+              data = biomass, family = binomial(link = "logit"))
+```
+
+#### Residuals
+
+Since the response are "0" and "1" the residuals will not show much. The below set of functions will generate residuals, which we will then plot.
+
+```{r, include=FALSE}
+res.prefirepyromod2 = simulateResiduals(fittedModel = prefirepyromod2, n = 250)
+
+res.prefirepyromod2$scaledResiduals
+
+res.prefirepyromod2$scaledResidualsNormal
+```
+
+In the plot below, we are looking for the points in the QQ plot to fall along the RED line. In the Residuals vs.predicted plot we are looking for the lines to be relatively horizontal. All looks good. 
+
+```{r}
+plotSimulatedResiduals(simulationOutput = res.prefirepyromod2)
+```
+
+#### Drop-in-deviance
+
+Here we conduct a drop-in-deviance test to test the interaction term. The interaction term is found not to be significant.
+
+```{r}
+anova(prefirepyromod1, prefirepyromod2)
+```
+
+
+#### Model Summary
+
+```{r}
+summary(prefirepyromod2)
+```
+
+We will use probabilities and odds ratios to report the results.  The estimates and coefficients from the summary output are not appropriate for drawing inference. The odds ratios will allow us to compare the difference between groups of interest (e.g. beetle-killed vs. fire-killed).
+
+We are interested in the probability of a tree having deep char **"yes"**. We want to predict the probability of **"yes"** so we will set the reference level to **"no"**. 
+
+#### Probabilities & Odds Ratios
+
+```{r}
+summary(lsmeans(prefirepyromod2, pairwise ~ prefire|burncon, type = "response", infer = TRUE))
+```
+
+##### Data frame
+
+```{r}
+data.frame(summary(lsmeans(prefirepyromod2, pairwise ~ prefire|burncon),type = "response", infer = TRUE)$contrasts)
+```
+
+##### Proababilities and reverse Odds Ratios 
+
+We are calculating the odds ratios for the reverse relationship. We are doing this because the values are so small for the FIRE-BOM and FIRE-UPF.  The reverse will be easier to interpret.
+
+```{r}
+summary(lsmeans(prefirepyromod2, revpairwise ~ prefire|burncon, type = "response", infer = TRUE))
+```
+
+##### Data Frame
+
+```{r}
+data.frame(summary(lsmeans(prefirepyromod2, revpairwise ~ prefire|burncon),type = "response", infer = TRUE)$contrasts)
+```
+
+
+```{r}
+( prefiredeepchar.prob = data.frame(summary(lsmeans(prefirepyromod2, pairwise ~ prefire|burncon),type = "response", infer = TRUE)) )
+```
+
+```{r}
+prefiredeepchar.prob2 = prefiredeepchar.prob
+
+levels(prefiredeepchar.prob2$lsmeans.burncon)[levels(prefiredeepchar.prob2$lsmeans.burncon)=="moderate"] = "Moderate Conditions"
+
+levels(prefiredeepchar.prob2$lsmeans.burncon)[levels(prefiredeepchar.prob2$lsmeans.burncon)=="extreme"] = "Extreme Conditions"
+
+levels(prefiredeepchar.prob2$lsmeans.prefire)[levels(prefiredeepchar.prob2$lsmeans.prefire)=="no"] = "Fire Snag"
+
+levels(prefiredeepchar.prob2$lsmeans.prefire)[levels(prefiredeepchar.prob2$lsmeans.prefire)=="yes"] = "Prefire Snag"
+
+prefiredeepchar.prob2 = mutate(prefiredeepchar.prob2, response = "Deep Char" )
+head(prefiredeepchar.prob2)
+```
+
+## Canopy Structure as a function of deep char area
+
+This is an exploratory analysis. Further research should be conducted on the relationship between dead trees, deep charring, and consumption of canopy structure and the variability under different burning conditions. 
+
+### Model: Canopy Structure product of deep char area
+
+```{r}
+cspyromod99 = glmer(canopy2 ~ pyro3 + burncon + (1 | id), data = biomass, family = binomial(link = "logit"))
+```
+
+
+```{r}
+cspyromod99.1 = glmer(canopy2 ~ pyro3 * burncon + (1 | id), data = biomass, family = binomial(link = "logit"))
+```
+
+### Residuals
+
+```{r, include=FALSE}
+cspyromod99.1.res = simulateResiduals(fittedModel = cspyromod99.1, n = 250)
+
+cspyromod99.1.res$scaledResiduals
+
+cspyromod99.1.res$scaledResidualsNormal
+```
+
+```{r}
+plotSimulatedResiduals(simulationOutput = cspyromod99.1.res)
+```
+
+In the plot above we are looking for the points in the QQ plot to fall along the RED line. In the Residuals vs.predicted plot were are looking for the lines to be relatively horizontal. All looks good.
+
+#### Drop-in-deviance
+
+Here we conduct a drop-in-deviance test to test the interaction term. The interaction term is found not to be significant.
+
+```{r}
+anova(cspyromod99, cspyromod99.1)
+```
+
+### Model summary
+
+We will use probabilities and odds ratios to report and discuss the results.  The estimates and coefficients from the summary output with the estimates and coefficients are not appropriate for drawing inference. The odds ratios will allow us to compare the difference between groups of interest (e.g. beetle-killed vs. fire-killed).
+
+We are interested in the probability of a tree loosing its canopy **"no"**. We want to predict the probability of **"no"** so we will set the reference level to **"yes"**. 
+
+```{r}
+summary(cspyromod99.1)
+```
+
+#### Probabilities & Odds Ratios
+#### Pairwise: Odds Ratios by deep charring
+
+```{r}
+summary(lsmeans(cspyromod99.1, pairwise ~ pyro3|burncon, type = "response", infer = TRUE, level = .9, adjust = "bon"))
+```
+
+```{r}
+data.frame(summary(lsmeans(cspyromod99.1, pairwise ~ pyro3|burncon),type = "response", infer = TRUE, level = .9, adjust = "bon"))
+```
+
+```{r}
+summary(lsmeans(cspyromod99.1, revpairwise ~ pyro3|burncon, type = "response", infer = TRUE, level = .9, adjust = "bon"))
+```
+
+```{r}
+data.frame(summary(lsmeans(cspyromod99.1, revpairwise ~ pyro3|burncon),type = "response", infer = TRUE, level = .9, adjust = "bon"))
+```
+
+
+**THE END**
