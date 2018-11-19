@@ -1,0 +1,995 @@
+---
+title: "Beetle-Fire Plot-level Manuscript"
+author: "Anna Talucci"
+date: "2018-11-19"
+output: html_document
+---
+
+# Overview
+This analysis contains all plot-level fire effects, surface and stem measurements.
+
+
+# Packages
+
+Note Package tweedie and statmod are needed for soil and litter analysis, which were analyzed using the tweedie distribution.
+
+The following Packages are required for the below analyses:
+
+
+```{r, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(tweedie)
+library(statmod)
+library(car)
+library(GGally)
+library(MASS)
+library(cplm)
+library(aod)
+library(gridExtra)
+library(cowplot)
+library(magick)
+```
+
+Notes about Packages:
+* tweedie - used for continuous proportions; distribution tweedie or compound Poisson
+* aod - used for beta binomial distributions; proportion of trees with deep char and proportion of trees killed by fire
+
+
+# Stem Fire Effects Overview
+
+The analysis here is for tree fire effects as a measurement of fire severity for crown/canopy strata.  The purpose of the analysis is to determine if there is a relationship between fire severity and beetle outbreak severity. Tree fire effects variables were used to quantify fire severity and included scorch height, percent of bole scorched, proportion of trees with deep char, and proportion of trees killed by fire.  
+
+Measurements were taken on individual trees and then aggregated up to the plot level for purposes of analyses.
+
+Two explanatory variables were used for the analyses. One representing proportion of beetle killed trees and one for fire weather.  
+
+Proportion of beetle killed trees were calculated from individual tree records for each plot.  We had three estimates for proportion of beetle killed trees.  The first was the most conservative estimate based on j-shape galleries in the tree.  The second was a moderately conservative estimate of beetle killed trees based on j-shaped galleries, other pre-fire beetle activity, and clear evidence the tree was dead prior to fire. The third is an estimate of all pre-fire killed trees and included trees that had evidence of being dead prior to fire, but where lacking distinguishable beetle galleries. The analyses here use the second moderately conservative estimate.   
+
+Fire weather was estimated from the Fire Weather Index (FWI) and then split into burning conditions, a categorical variable - extreme and moderate based off guidelines cited in text.
+
+The below analyses are for remaining duff depth, surface charring, remaining litter, and exposed mineral soil as response variables.  Explanatory variables include proportion of beetle killed trees and fire weather as a categorical variable based on the FWI split proposed by Alexander and De Groot (1988).
+
+
+# Data
+
+```{r}
+bole.fire = read.csv("../data/bole_bom_utm.csv", header=TRUE, sep = ",", strip.white = TRUE)
+
+head(bole.fire)
+```
+
+## Calculate Additional Variables For Analysis
+
+We will calculate additional variables for the purpose of analysis.  
+
+* BOM = Beetle outbreak Mortality (tree with visible beetle evidence in plot) 
+* APF = All pre-fire mortality defined by visible beetle galleries and/or deep char
+
+```{r}
+bole.fire = mutate(bole.fire, prop.bom = bom.bom.ct/stems)
+bole.fire = mutate(bole.fire, apf.ct = bom.bom.ct + bom.upf.ct)
+bole.fire = mutate(bole.fire, prop.apf = apf.ct/stems )
+bole.fire = mutate(bole.fire, prop.bolesc = bole.sc*0.01)
+bole.fire = mutate(bole.fire, prop.bolesc.adj = bole.sc.adj*0.01)
+bole.fire = mutate(bole.fire, prop.no.bolesc = 1 - prop.bolesc)
+bole.fire = mutate(bole.fire, prop.fire = bom.fire.ct/stems)
+bole.fire = mutate(bole.fire, prop.prefire = (bom.bom.ct + bom.upf.ct)/stems)
+
+```
+
+Let's look at the data and make sure all the transformation have been added. 
+
+```{r}
+head(bole.fire)
+```
+
+```{r}
+bole.fire
+```
+
+# Visualize data
+
+Let's look at the Data for anything weird/anomalous. Examine the distributions of the date - are there lots of 1 or 0? is there clumping? are there weird shapes? are there areas of missing data?  
+
+## Explanatory Variables
+
+### Proportion of Beetle Mortality (BOM)
+
+```{r}
+qplot(x = prop.bom, data = bole.fire, geom = "histogram")
+```
+
+## Response Variables Histograms
+
+### Scorch Height
+
+```{r}
+qplot(x = scorch.ht, data = bole.fire, geom = "histogram")
+```
+
+### Percent of No bole scorched
+
+Analyzed as reverse Proportion of trees with no bole scorch to use a tweedie distribution
+
+```{r}
+qplot(x = prop.no.bolesc, data = bole.fire, geom = "histogram")
+```
+
+```{r}
+ggplot(data = bole.fire, aes(x = prop.bom , y = prop.no.bolesc)) + 
+    geom_point(size = 2) 
+```
+
+### Percent of bole scorched
+
+```{r}
+qplot(x = prop.bolesc, data = bole.fire, geom = "histogram")
+```
+
+
+```{r}
+ggplot(data = bole.fire, aes(x = prop.bom , y = prop.bolesc)) + 
+    geom_point(size = 2) 
+```
+
+### Percent of bole scorched (adjusted by 0.002)
+
+```{r}
+qplot(x = prop.bolesc.adj, data = bole.fire, geom = "histogram")
+```
+
+```{r}
+ggplot(data = bole.fire, aes(x = prop.bom , y = prop.bolesc.adj)) + 
+    geom_point(size = 2) 
+```
+
+### Proportion of trees killed by fire
+
+```{r}
+qplot(x = prop.fire, data = bole.fire, geom = "histogram")
+```
+
+## Correlation Plots 
+
+### Scorch Height (BOM)
+ 
+```{r}
+ggpairs( dplyr::select(bole.fire, prop.bom, fwi, scorch.ht),
+         upper = list(continuous = wrap("cor", size = 10) ) )
+```
+
+### Percent of bole scorched (BOM)
+
+Analyzed as reverse Proportion of trees with no bole scorch to use a tweedie distribution
+
+```{r}
+ggpairs( dplyr::select(bole.fire, prop.bom, fwi, prop.no.bolesc),
+         upper = list(continuous = wrap("cor", size = 10) ) )
+```
+
+### Proportion of trees killed by fire with BOM
+
+```{r}
+ggpairs( dplyr::select(bole.fire, prop.bom, fwi, prop.fire),
+         upper = list(continuous = wrap("cor", size = 10) ) )
+```
+
+# Analysis (Stems) 
+
+The following anlyses are for **Scorch height and bole scorch**.
+
+All models include an interaction term for fuel and weather, proportion of beetle mortality and fire weather index, since weather and fuels are required components of the wildfire process. A drop-in-deviance (likelihood ratio) test was used to test the interaction term for all models.
+
+Formula notation is set up so that the summary output provides both intercepts and both slopes without needing further computation.
+
+## Model: Scorch Height (BOM)
+
+```{r}
+height1 = lm(scorch.ht ~ burn.cond + prop.bom:burn.cond, data = bole.fire)
+summary(height1)
+anova(height1)
+```
+
+### Residuals: Scorch Height (BOM)
+
+```{r}
+bole.fire$height1res = resid(height1, type = "pearson")
+bole.fire$height1fit = fitted(height1)
+
+plot(height1, which = 2)
+
+qplot(fitted(height1), resid(height1)) + theme_bw()
+
+qplot(prop.bom, resid(height1), data = bole.fire) + theme_bw()
+
+qplot(fwi, resid(height1), data = bole.fire) + theme_bw()
+
+qplot(x = factor(1), y = height1res, data = bole.fire, geom = "boxplot")
+```
+
+### Drop-in-deviance test: Scorch Height 
+
+```{r}
+height2 = lm(scorch.ht ~ burn.cond + prop.bom, data = bole.fire)
+
+anova(height1, height2)
+```
+
+### Estimates & CI: Scorch Height (BOM)
+
+```{r}
+coef(height1)
+confint(height1)
+```
+
+## Model: Percent uncharred (BOM)
+
+Note: Analyzed as reverse Proportion of trees with no bole scorch to use a tweedie distribution.
+
+There are 2 models generated below using the tweedie distribution.  The reason for 2 models is to generate the tweedie.profile to feed into the actual model. The tweedie profile assists in calculating the var.power for the model. Tweedie distributions can accommodate a number of var.power values (see r documentation).
+
+Tweedie Distribution uses log-link function
+
+Tweedie distributon is used for continuous proportions.
+
+```{r}
+nobolesc1 = glm(prop.no.bolesc ~ burn.cond + prop.bom:burn.cond, data = bole.fire, family = tweedie(link.power=0, var.power=2))
+
+pro.tweedienbsc1 = tweedie.profile( nobolesc1, p.vec = seq(1.2, 1.8, by = 0.1) )
+pro.tweedienbsc1$p.max
+pro.tweedienbsc1$ci
+
+
+nobolesc2 = glm(prop.no.bolesc ~ burn.cond + prop.bom:burn.cond, data = bole.fire, family = tweedie(link.power=0,var.power=pro.tweedienbsc1$p.max))
+
+summary(nobolesc2)
+```
+
+### Residuals: Percent unchared (BOM)
+
+```{r}
+bole.fire$nobolesc2.res = resid(nobolesc2, type = "pearson")
+bole.fire$nobolesc2.fit = fitted(nobolesc2)
+
+sum(residuals(nobolesc2, type="pearson")^2)/nobolesc2$df.res
+
+qplot(fitted(nobolesc2), resid(nobolesc2)) + theme_bw()
+
+```
+
+### Drop-in-deviance Test: Percent uncharred (BOM)
+
+In order to conduct a drop in deviance test for to assess the significance of the interaction term, we need to generate a model without the interaction term using the tweedie distribution.
+```{r}
+nobolesc3 = glm(prop.no.bolesc ~ burn.cond + prop.bom, data = bole.fire, 
+             family = tweedie(link.power=0, var.power=2))
+
+pro.tweedienbsc3 = tweedie.profile( nobolesc3, p.vec = seq(1.2, 1.8, by = 0.1) )
+pro.tweedienbsc3$p.max
+pro.tweedienbsc3$ci
+
+
+nobolesc4 = glm(prop.no.bolesc ~ burn.cond + prop.bom, data = bole.fire,
+                family = tweedie(link.power=0, var.power=pro.tweedienbsc3$p.max))
+```
+
+Drop in deviance test for the interaction term. For tweedie distribution we must specify the type of test as "chisq" for a chi-squared test.
+```{r}
+
+anova(nobolesc4, nobolesc2, test = "Chisq")
+```
+
+### Estimates & CI: Percent uncharred (BOM)
+
+Back transform to the original scale (tweedie link function = log). The Tweedie package does not have a function to extract CI. We will manually calculate estimated CI based on SE. 
+
+
+First, extract estimate and exponentiate back to the original scale
+```{r}
+( nobolesc2.est = summary(nobolesc2)$coefficients[, 1] )
+```
+
+Inverse link back to the original scale of the data with plogis() function. Plogis() function provides the probabilities for the estimate.
+```{r}
+( nobolesc2.estorg = exp(nobolesc2.est) )
+```
+
+Extract SE 
+```{r}
+( nobolesc2.se = summary(nobolesc2)$coefficients[, 2] )
+```
+
+Reverse transform SE back to original scale
+```{r}
+( nobolesc2.se.org = exp(nobolesc2.se))
+```
+
+Calculate CI for the model then inverse link back to the original scale
+```{r}
+( nobolesc2.upper = exp(nobolesc2.est + (nobolesc2.se * 1.96)) )
+
+( nobolesc2.lower = exp(nobolesc2.est - (nobolesc2.se * 1.96)) )
+```
+
+
+## Model: Percent of charred (BOM)
+
+Note:  Redo not as no bole scorch
+
+```{r, fig.height=4, fig.width=6}
+bolesca = glm(prop.bolesc.adj ~ burn.cond + prop.bom:burn.cond, data = bole.fire)
+
+bolescb = glm(prop.bolesc.adj ~ burn.cond + prop.bom, data = bole.fire)
+summary(bolesca)
+```
+
+```{r, fig.height=4, fig.width=6}
+bolesc1 = glm(prop.bolesc.adj ~ burn.cond + prop.bom:burn.cond, data = bole.fire, family = tweedie(link.power=0, var.power=2))
+
+pro.tweediebolesc1 = tweedie.profile(bolesc1, p.vec = seq(1.2, 1.8, by = 0.1) )
+pro.tweediebolesc1$p.max
+pro.tweediebolesc1$ci
+
+
+bolesc2 = glm(prop.bolesc.adj ~ burn.cond + prop.bom:burn.cond, data = bole.fire, family = tweedie(link.power=0,var.power=pro.tweediebolesc1$p.max))
+
+summary(bolesc2)
+```
+
+### Residuals: Percent charred (BOM)
+
+```{r}
+bole.fire$bolesc2.res = resid(bolesc1, type = "pearson")
+bole.fire$bolesc2.fit = fitted(bolesc1)
+
+sum(residuals(bolesc2, type="pearson")^2)/bolesc2$df.res
+
+qplot(fitted(bolesc2), resid(bolesc2)) + theme_bw()
+
+```
+
+### Drop in deviance: percent charred (BOM)
+
+```{r}
+bolesc3 = glm(prop.bolesc.adj ~ burn.cond + prop.bom:burn.cond, data = bole.fire, family = tweedie(link.power=0, var.power=2))
+
+pro.tweediebolesc1 = tweedie.profile(bolesc3, p.vec = seq(1.2, 1.8, by = 0.1) )
+pro.tweediebolesc1$p.max
+pro.tweediebolesc1$ci
+
+
+bolesc4 = glm(prop.bolesc.adj ~ burn.cond + prop.bom:burn.cond, data = bole.fire, family = tweedie(link.power=0,var.power=pro.tweediebolesc1$p.max))
+```
+
+
+```{r}
+anova(bolesc2, bolesc4)
+```
+
+
+### Estimates and CI: percent Charred (BOM)
+
+```{r}
+summary(bolesc2)
+```
+
+
+# Analysis (Stems) 
+
+Deep char and fire killed trees
+
+Beta binomial distribution was used for the proportion of trees with char and the proportion of trees killed by fire.  This was selected after having modeled them with a glm model with binomial distribution and with a quasi binomial distribution.  Both the binomial and quasi binomial models were over-dispersed and did not produce a good model fit.
+
+  * Beta binomial distribution use "aod" package
+  * link function: logit
+  * likelihood ratio = drop in deviance
+  * inverse logit = inv.logit
+
+## Data
+
+Note: Data file for this analysis was reorganized from the bole.fire data because the aod package was a bit finicky about headers and data format.
+```{r}
+firetree = read.csv("../data/tree_betabinomial_data_analysis.csv", header=TRUE, sep = ",", strip.white = TRUE)
+head(firetree)
+```
+
+```{r}
+firetree = transform(firetree, propchar = char/stems)
+firetree = transform(firetree, propfire = fire/stems)
+head(firetree)
+```
+
+### Model: Deep Char (BOM)
+
+Link function is Logit. Output will be in log odds.
+```{r}
+
+char1 = betabin(cbind(char, stems-char) ~ propbom, ~1, data = firetree, 
+                link = "logit")
+char2 = betabin(cbind(char, stems-char) ~ propbom + burncon, ~1, data = firetree, 
+                link =  "logit")
+char3 = betabin(cbind(char, stems-char) ~ propbom * burncon, ~1, data = firetree, 
+                link = "logit")
+char4 = betabin(cbind(char, stems-char) ~ burncon + propbom:burncon, ~1, 
+                data = firetree, link = "logit")
+
+char1; char2; char3; char4
+
+summary(char4)
+```
+
+Note: CI not computed if value below zero
+
+#### Residuals: Deep Char (BOM)
+
+```{r}
+sum(residuals(char4, type = "pearson")^2)
+
+varbin(stems, char, data = firetree, alpha = 0.05)
+```
+
+#### Drop-in-deviance test:Deep Char (BOM)
+
+```{r}
+anova(char2, char3)
+```
+
+#### Estimates & CI: Deep Char (BOM)
+
+The beta-binomial uses the link function = logit in the model. In order to report estimates and CI the data need to be transformed back to the original scale using plogis() function, which converts the output to.
+
+Note: The use of the @Coef. This is needed to extract the summary data from an S4 object so the estimates can be transformed back to the original scale with the plogis() function.
+
+Here we extract the summary from the model.
+```{r}
+summary(char4)@Coef
+```
+
+First, extract estimates from summary then 
+```{r}
+( char4.est = summary(char4)@Coef[, 1]  )
+```
+
+
+Inverse link back to the original scale of the data with plogis() function. Plogis() function provides the probabilities for the estimate.
+```{r}
+( char4.estorg = plogis(char4.est) )
+```
+
+Extract SE 
+```{r}
+( char4.se = summary(char4)@Coef[, 2] )
+```
+
+Inverse link se back to original scale
+```{r}
+( char4.se.org = plogis(char4.se) )
+```
+
+Calculate CI for the model then inverse link back to the original scale
+```{r}
+( char4.upper = plogis(char4.est + (char4.se * 1.96)) )
+
+( char4.lower = plogis(char4.est - (char4.se * 1.96)) )
+```
+
+### Model: Deep Char (APF)
+
+```{r}
+char5 = betabin(cbind(char, stems-char) ~ propapf, ~1, data = firetree, 
+                link = "logit")
+char6 = betabin(cbind(char, stems-char) ~ propapf + burncon, ~1, data = firetree, 
+                link = "logit")
+char7 = betabin(cbind(char, stems-char) ~ propapf * burncon, ~1, data = firetree, 
+                link = "logit")
+char8 = betabin(cbind(char, stems-char) ~ burncon + propapf:burncon , ~1, 
+                data = firetree, link = "logit")
+
+char5; char6; char7; char8
+
+summary(char8)
+```
+
+#### Residuals: Deep Char (APF)
+
+```{r}
+sum(residuals(char8, type = "pearson")^2)
+
+varbin(stems, char, data = firetree, alpha = 0.05)
+
+coef(char8)
+
+```
+
+#### Drop-in-deviance test: Deep Char (APF)
+
+```{r}
+anova(char6, char8)
+```
+
+#### Estimates and CI: Deep Char (APF)
+
+The beta-binomial uses the link function = logit in the model. In order toreport estimates and CI the data need to be transformed back to the original scale using plogis() function.
+
+Note the use of the @Coef. This is need to extract the summary data from an S4 object so the estimates can be transformed back to the orginal scale with the plogis() function.
+
+```{r}
+summary(char8)@Coef
+```
+
+First, extract estimates from summary then 
+
+```{r}
+( char8.est = summary(char8)@Coef[, 1]  )
+```
+
+Inverse link back to the orginal scale of the data with plogis() function. Plogis() function provides the probabilities for the estimate.
+
+```{r}
+( char8.estorg = plogis(char8.est) )
+```
+
+Extract SE 
+
+```{r}
+( char8.se = summary(char8)@Coef[, 2] )
+```
+
+Inverse link se back to orginial scale
+```{r}
+( char8.se.org = plogis(char8.se) )
+```
+
+Calculate CI for the model then inverse link back to the orginal scale
+
+```{r}
+( char8.upper = plogis(char8.est + (char8.se * 1.96)) )
+
+( char8.lower = plogis(char8.est - (char8.se * 1.96)) )
+```
+
+### Model: Fire-killed (BOM)
+
+```{r}
+fire1 = betabin(cbind(fire, stems-fire) ~ propbom, ~1, data = firetree, 
+                link = "logit")
+fire2 = betabin(cbind(fire, stems-fire) ~ propbom + burncon, ~1, data = firetree, 
+                link = "logit")
+fire3 = betabin(cbind(fire, stems-fire) ~ burncon + propbom:burncon, ~1, 
+                data = firetree, link = "logit")
+
+fire1; fire2; fire3
+
+summary(fire3)
+```
+
+#### Residuals: Fire-killed (BOM)
+
+```{r}
+sum(residuals(fire3, type = "pearson")^2)
+
+varbin(stems, fire, data = firetree, alpha = 0.05)
+
+coef(fire3)
+```
+
+
+#### Drop-in-deviance: Fire-killed (BOM)
+
+```{r}
+anova(fire2, fire3)
+```
+
+#### Estimates & CI: Fire-killed (BOM)
+
+link function = logit
+reverse logit link use plogis()
+```{r}
+summary(fire3)@Coef
+```
+
+First, extract estimates from summary then 
+```{r}
+( fire3.est = summary(fire3)@Coef[, 1]  )
+```
+
+Inverse link back to the original scale of the data with plogis() function. Plogis() function provides the probabilities for the estimate.
+```{r}
+( fire3.estorg = plogis(fire3.est) )
+```
+
+Extract SE 
+```{r}
+( fire3.se = summary(fire3)@Coef[, 2] )
+```
+
+Inverse link se back to original scale
+```{r}
+( fire3.se.org = plogis(fire3.se) )
+```
+
+Calculate CI for model then inverse link back to the original scale
+```{r}
+( fire3.upper = plogis(fire3.est + (fire3.se * 1.96)) )
+
+( fire3.lower = plogis(fire3.est - (fire3.se * 1.96)) )
+```
+
+
+
+# Surface Fire Effects Overview
+
+The analysis is for field measured surface fire effects to quantify fire severity. The purpose of the analysis is to determine if there is a relationship between fire severity and beetle outbreak severity. Surface fire effects variables were used to quantify fire severity and included proportion of exposed soil,  proportion of green vegetation, proportion of surface char, proportion of remaining litter, and duff depth.  
+
+Measurements were taken in one-by-one meter subplots within each quadrant of the 10-by-10 meter plot and then averaged up to the plot level for purposes of analyses.
+
+Two explanatory variables were used for the analyses. One representing proportion of beetle killed trees and one for fire weather.  
+
+Proportion of beetle killed trees were calculated from individual tree records for each plot.  We had three estimates for proportion of beetle killed trees.  The first was the most conservative estimate based on j-shape galleries in the tree.  The second was a moderately conservative estimate of beetle killed trees based on j-shaped galleries, other pre-fire beetle activity, and clear evidence the tree was dead prior to fire. The third is an estimate of all pre-fire killed trees and included trees that had evidence of being dead prior to fire, but where lacking distinguishable beetle galleries. The analyses here use the second moderately conservative estimate.   
+
+Fire weather was estimated from the Fire Weather Index (FWI) and then split into burning conditions, a categorical variable - extreme and moderate based off guidelines cited in text.
+
+The below analyses are for remaining duff depth, surface charring, remaining litter, and exposed mineral soil as response variables.  Explanatory variables include proportion of beetle killed trees and fire weather as a categorical variable based on the FWI split proposed by Alexander and De Groot (1988).
+
+
+
+# Data
+
+Read in Data file
+```{r}
+surf.fire = read.csv("../data/surf_bom_utm.csv", header=TRUE, sep = ",", strip.white = TRUE)
+```
+
+```{r, include=FALSE}
+head(surf.fire)
+summary(surf.fire)
+```
+
+## Calculate Additional Variables For Analysis
+
+BOM = Beetle outbreak Mortality (tree with visible beetle evidence in plot)
+APF = All pre-fire mortality defined by visible beetle galleries and deep char
+surf.char = Ground char converted from continuous percent to continuous proportion
+prop.litter = litter converted from continuous percent to continuous proportion
+prop.soil = soil converted from continuous percent to continuous proportion
+
+Calculate transformations for examining data and conducting analysis
+
+```{r}
+surf.fire = transform(surf.fire, prop.bom = bom.bom.ct/stems)
+surf.fire = transform(surf.fire, prop.apf = (bom.bom.ct + bom.upf.ct)/stems)
+surf.fire = transform(surf.fire, surf.char = ground.char*0.01)
+surf.fire = transform(surf.fire, prop.litter = litter*0.01)
+surf.fire = transform(surf.fire, prop.soil = soil*0.01)
+surf.fire = transform(surf.fire, duff.mm = duff.depth*10)
+surf.fire = mutate(surf.fire, logit.ground.char = logit(surf.char) )
+```
+
+Let's look at the data and make sure it includes the additional variables that we calculated above.
+
+```{r}
+head(surf.fire)
+```
+
+# Visualize Data
+
+Let's look at the Data for anything weird/anomalous. Examine the distributions of the data: are there lots of 1 or 0? is there clumping? are there weird shapes? are there areas of missing data?
+
+## Explanatory Variables
+
+### Proportion of Beetle Outbreak Mortality (BOM)
+
+```{r}
+qplot(x = prop.bom, data = surf.fire, geom = "histogram")
+```
+
+### Proportion of Prefire Mortality (APF)
+
+```{r}
+qplot(x = prop.apf, data = surf.fire, geom = "histogram")
+```
+
+## Response Variables Histograms
+
+### Remaining Duff Depth
+
+```{r}
+qplot(x = duff.mm, data = surf.fire, geom = "histogram")
+```
+
+### Ground Char
+
+```{r}
+qplot(x = ground.char, data = surf.fire, geom = "histogram")
+```
+
+### Remaining Litter
+
+```{r}
+qplot(x = litter, data = surf.fire, geom = "histogram")
+```
+
+### Exposed Soil
+
+```{r}
+qplot(x = soil, data = surf.fire, geom = "histogram")
+```
+
+## Correletaion Plots
+
+### Duff Depth
+
+```{r}
+ggpairs( dplyr::select(surf.fire, prop.bom, fwi, duff.mm),
+         upper = list(continuous = wrap("cor", size = 10) ) )
+```
+
+### Surface Char
+
+```{r}
+ggpairs( dplyr::select(surf.fire, prop.bom, fwi, ground.char),
+         upper = list(continuous = wrap("cor", size = 10) ) )
+```
+
+### Remianing Litter
+
+```{r}
+ggpairs( dplyr::select(surf.fire, prop.bom, fwi, litter),
+         upper = list(continuous = wrap("cor", size = 10) ) )
+```
+
+### Exposed Soil
+
+```{r}
+ggpairs( dplyr::select(surf.fire, prop.bom, fwi, soil),
+         upper = list(continuous = wrap("cor", size = 10) ) )
+```
+
+# Analysis (Surface)
+
+All models include an interaction term for fuel and weather, proportion of beetle mortality and fire weather index, since weather and fuels are strong controls of wildfire.
+
+## Model:Duff Depth (BOM)
+
+```{r}
+dd1 = lm(duff.mm ~ burn.cond + prop.bom:burn.cond, data = surf.fire)
+summary(dd1)
+
+anova(dd1)
+```
+
+### Residuals: Duff Depth (BOM)
+
+```{r, fig.height=4, fig.width=6}
+surf.fire$dd1.res = resid(dd1, type = "pearson")
+surf.fire$dd1.fit = fitted(dd1)
+
+plot(dd1, which = 2)
+
+qplot(fitted(dd1), resid(dd1)) + theme_bw()
+
+qplot(prop.bom, resid(dd1), data = surf.fire) + theme_bw()
+```
+
+### Drop-in-deviance test: Duff Depth (BOM)
+
+```{r}
+dd2 = lm(duff.mm ~ prop.bom + burn.cond, data = surf.fire)
+
+anova(dd1, dd2)
+```
+
+### Estimates & CI: Duff Depth (BOM)
+
+```{r}
+coef(dd1)
+confint(dd1)
+```
+
+## Model: Surface char (BOM)
+
+```{r}
+gc1 = lm(logit.ground.char ~ burn.cond + prop.bom:burn.cond, 
+         data = surf.fire)
+summary(gc1)
+anova(gc1)
+```
+
+### Residuals: Surface Char (BOM)
+
+```{r}
+surf.fire$gc1.res = resid(gc1, type = "pearson")
+surf.fire$gc1.fit = fitted(gc1)
+
+plot(gc1, which = 2)
+
+qplot(fitted(gc1), resid(gc1)) + theme_bw()
+
+qplot(prop.apf, resid(gc1), data = surf.fire) + theme_bw()
+
+```
+
+### Drop-in-deviance surface char (BOM)
+
+```{r}
+gc2 = lm(logit.ground.char ~ prop.bom + burn.cond, 
+         data = surf.fire)
+
+anova(gc1, gc2)
+```
+
+### Estimates & CI: Surface Char (BOM)
+
+Back transform to original scale
+
+```{r}
+inv.logit(coef(gc1))
+inv.logit(confint(gc1))
+```
+
+```{r}
+( gc1.se = summary(gc1)$coefficients[, 2] )
+( gc1.seorg = plogis(gc1.se) )
+```
+
+## Model: Remining Litter (BOM) 
+
+Tweedie Distribution uses log-link function
+```{r, fig.height=4, fig.width=6}
+litter1 = glm(prop.litter ~ burn.cond + prop.bom:burn.cond, data = surf.fire, 
+             family = tweedie(link.power=0, var.power=2))
+
+pro.tweedie1 = tweedie.profile( litter1, p.vec = seq(1.2, 1.8, by = 0.1) )
+pro.tweedie1$p.max
+pro.tweedie1$ci
+
+litter2 = glm(prop.litter ~ burn.cond + prop.bom:burn.cond, data = surf.fire, 
+             family = tweedie(link.power=0, var.power=pro.tweedie1$p.max))
+
+summary(litter2)
+```
+
+### Residuals: Remining Litter (BOM) 
+
+```{r, fig.height=4, fig.width=6}
+surf.fire$litter2.res = resid(litter2, type = "pearson")
+surf.fire$litter2.fit = fitted(litter2)
+
+sum(residuals(litter2, type="pearson")^2)/litter2$df.res
+
+qplot(fitted(litter2), resid(litter2)) + theme_bw()
+```
+
+### Drop-in-deviance Test for interaction term: Remining Litter with BOM 
+
+In order to conduct a drop in deviance test for to assess the significance of the interaction term, we need to generate a model without the interaction term using the tweedie distribution.
+```{r}
+litter3 = glm(prop.litter ~ prop.bom + burn.cond, data = surf.fire, 
+             family = tweedie(link.power=0, var.power=2))
+
+pro.tweedie3 = tweedie.profile( litter3, p.vec = seq(1.2, 1.8, by = 0.1) )
+pro.tweedie3$p.max
+pro.tweedie3$ci
+
+litter4 = glm(prop.litter ~ prop.bom + burn.cond, data = surf.fire, 
+             family = tweedie(link.power=0, var.power=pro.tweedie3$p.max))
+```
+
+Drop in deviance test for the interaction term. For tweedie distribution we must specify the type of test as "chisq" for a chi-squared test.
+```{r}
+anova(litter4, litter2, test = "Chisq")
+```
+
+### Estimates & CI: Remining Litter (BOM) 
+
+Back transform to the original scale (tweedie link function = log). The Tweedie package does not have a function to extract CI. We will manually calculate estimated CI based on SE. 
+
+First, extract estimate and exponentiate back to the original scale
+```{r}
+( litter2.est = summary(litter2)$coefficients[, 1] )
+```
+
+
+Inverse link back to the original scale of the data with plogis() function. Plogis() function provides the probabilities for the estimate.
+```{r}
+( litter2.estorg = exp(litter2.est) )
+```
+
+Extract SE 
+```{r}
+( litter2.se = summary(litter2)$coefficients[, 2] )
+```
+
+reverse transform SE back to original scale
+```{r}
+( litter2.se.org = exp(litter2.se))
+```
+
+Calculate CI for the model then inverse link back to the original scale
+```{r}
+( litter2.upper = exp(litter2.est + (litter2.se * 1.96)) )
+
+( litter2.lower = exp(litter2.est - (litter2.se * 1.96)) )
+```
+
+## Model: Exposed Soil (BOM) 
+
+Note: soil1 is used to calculate the p value used in soil2; soil 2 is the final model
+```{r, fig.height=4, fig.width=6}
+soil1 = glm(prop.soil ~ burn.cond + prop.bom:burn.cond, data = surf.fire, 
+             family = tweedie(link.power=0, var.power=2)) 
+
+pro.tweedie.soil1 = tweedie.profile( soil1, p.vec = seq(1.2, 1.8, by = 0.1) )
+pro.tweedie.soil1$p.max 
+
+soil2 = glm(prop.soil ~ burn.cond + prop.bom:burn.cond, data = surf.fire, 
+             family = tweedie(link.power=0, var.power=pro.tweedie.soil1$p.max))
+
+summary(soil2)
+```
+
+### Plot residuals: Exposed Soil (BOM) 
+
+```{r, fig.height=4, fig.width=6}
+surf.fire$soil2.res = resid(soil2, type = "pearson")
+surf.fire$soil2.fit = fitted(soil2)
+
+sum(residuals(soil2, type="pearson")^2)/soil2$df.res
+
+qplot(fitted(soil2), resid(soil2)) + theme_bw()
+```
+
+### Drop-in-deviance test for interaction term: Exposed Mineral Soil with BOM 
+
+First we will generate a model without the interaction term.
+```{r}
+soil3 = glm(prop.soil ~ burn.cond + prop.bom, data = surf.fire, 
+             family = tweedie(link.power=0, var.power=2)) 
+
+pro.tweedie.soil3 = tweedie.profile( soil3, p.vec = seq(1.2, 1.8, by = 0.1) )
+pro.tweedie.soil3$p.max 
+
+soil4 = glm(prop.soil ~ burn.cond + prop.bom, data = surf.fire, 
+             family = tweedie(link.power=0, var.power=pro.tweedie.soil3$p.max))
+```
+
+Now we will conduct a Drop-in-deviance test to test the interaction term.
+```{r}
+anova(soil4, soil2, test = "Chisq")
+```
+
+### Estimates & Confidence Intervals: Exposed Mineral Soil with BOM 
+
+Back transform to the original scale (tweedie link function = log). The Tweedie package does not have a function to extract CI. We will manually calculate estimated CI based on SE. 
+
+First, extract estimate and exponentiate back to the original scale
+```{r}
+( soil2.est = summary(soil2)$coefficients[, 1] )
+```
+
+Inverse link back to the original scale of the data with plogis() function. Plogis() function provides the probabilities for the estimate.
+```{r}
+( soil2.estorg = exp(soil2.est) )
+```
+
+Extract SE 
+```{r}
+( soil2.se = summary(soil2)$coefficients[, 2] )
+```
+
+reverse transform SE back to original scale
+```{r}
+( soil2.se.org = exp(soil2.se))
+```
+
+Calculate CI for the model then inverse link back to the original scale
+
+```{r}
+( soil2.upper = exp(soil2.est + (soil2.se * 1.96)) )
+
+( soil2.lower = exp(soil2.est - (soil2.se * 1.96)) )
+```
+
+
+**THE END**
